@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>WebSocket Test</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 50px auto;
+        padding: 20px;
+      }
+
+      #status {
+        padding: 10px;
+        border-radius: 4px;
+        margin-bottom: 20px;
+        font-weight: bold;
+      }
+
+      .notification {
+        background: #e3f2fd;
+        padding: 15px;
+        margin: 10px 0;
+        border-radius: 4px;
+        border-left: 4px solid #2196f3;
+        animation: slideIn 0.3s ease;
+      }
+
+      .notification.new {
+        background: #c8e6c9;
+        border-left-color: #4caf50;
+      }
+
+      @keyframes slideIn {
+        from {
+          transform: translateX(-20px);
+          opacity: 0;
+        }
+        to {
+          transform: translateX(0);
+          opacity: 1;
+        }
+      }
+
+      button {
+        background: #2196f3;
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 16px;
+      }
+
+      button:hover {
+        background: #1976d2;
+      }
+
+      button:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+      }
+
+      .notification-header {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8px;
+      }
+
+      .notification-name {
+        font-weight: bold;
+        color: #1976d2;
+      }
+
+      .notification-time {
+        color: #666;
+        font-size: 12px;
+      }
+
+      .notification-message {
+        color: #333;
+      }
+
+      #loading {
+        text-align: center;
+        color: #666;
+        padding: 20px;
+      }
+
+      /* Form styles */
+      .form-container {
+        background: #f5f5f5;
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 30px;
+      }
+
+      .form-group {
+        margin-bottom: 15px;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: bold;
+        color: #333;
+      }
+
+      input[type="text"],
+      textarea {
+        width: 100%;
+        padding: 10px;
+        border: 2px solid #ddd;
+        border-radius: 4px;
+        font-size: 14px;
+        font-family: Arial, sans-serif;
+        box-sizing: border-box;
+      }
+
+      input[type="text"]:focus,
+      textarea:focus {
+        outline: none;
+        border-color: #2196f3;
+      }
+
+      textarea {
+        resize: vertical;
+        min-height: 80px;
+      }
+
+      .char-counter {
+        text-align: right;
+        font-size: 12px;
+        color: #666;
+        margin-top: 5px;
+      }
+
+      .char-counter.warning {
+        color: #ff9800;
+      }
+
+      .char-counter.error {
+        color: #f44336;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Real-Time Notifications</h1>
+
+    <div id="status">Connecting...</div>
+
+    <!-- Form for creating notifications -->
+    <div class="form-container">
+      <h3 style="margin-top: 0; margin-bottom: 20px">Create Notification</h3>
+
+      <form id="notification-form" onsubmit="createNotification(event)">
+        <div class="form-group">
+          <label for="name-input">Name *</label>
+          <input
+            type="text"
+            id="name-input"
+            placeholder="Enter your name..."
+            maxlength="20"
+            required
+          />
+          <div class="char-counter" id="name-counter">0/20</div>
+        </div>
+
+        <div class="form-group">
+          <label for="message-input">Message *</label>
+          <textarea
+            id="message-input"
+            placeholder="Enter your message..."
+            maxlength="200"
+            required
+          ></textarea>
+          <div class="char-counter" id="message-counter">0/200</div>
+        </div>
+
+        <button type="submit" id="submit-btn">📤 Send Notification</button>
+      </form>
+    </div>
+
+    <h2>Notifications</h2>
+    <div id="loading">Loading notifications...</div>
+    <div id="messages"></div>
+
+    <script>
+      const statusDiv = document.getElementById("status");
+      const messagesDiv = document.getElementById("messages");
+      const loadingDiv = document.getElementById("loading");
+      const nameInput = document.getElementById("name-input");
+      const messageInput = document.getElementById("message-input");
+      const nameCounter = document.getElementById("name-counter");
+      const messageCounter = document.getElementById("message-counter");
+      const submitBtn = document.getElementById("submit-btn");
+
+      // Store notifications to prevent duplicates
+      let notifications = new Map();
+
+      // Character counter functionality
+      nameInput.addEventListener("input", function () {
+        const length = this.value.length;
+        const max = 20;
+        nameCounter.textContent = `${length}/${max}`;
+
+        if (length >= max) {
+          nameCounter.classList.add("error");
+        } else if (length >= max * 0.8) {
+          nameCounter.classList.add("warning");
+          nameCounter.classList.remove("error");
+        } else {
+          nameCounter.classList.remove("warning", "error");
+        }
+      });
+
+      messageInput.addEventListener("input", function () {
+        const length = this.value.length;
+        const max = 200;
+        messageCounter.textContent = `${length}/${max}`;
+
+        if (length >= max) {
+          messageCounter.classList.add("error");
+        } else if (length >= max * 0.8) {
+          messageCounter.classList.add("warning");
+          messageCounter.classList.remove("error");
+        } else {
+          messageCounter.classList.remove("warning", "error");
+        }
+      });
+
+      // Connect to WebSocket
+      const ws = new WebSocket("ws://localhost:8000/ws/notifications/");
+
+      ws.onopen = function (e) {
+        console.log("WebSocket Connected!");
+        statusDiv.textContent = "Connected ✓";
+        statusDiv.style.color = "green";
+        statusDiv.style.background = "#c8e6c9";
+
+        // Load existing notifications when connected
+        loadExistingNotifications();
+      };
+
+      ws.onmessage = function (e) {
+        console.log("Real-time message received:", e.data);
+        const data = JSON.parse(e.data);
+
+        // Add the new notification from WebSocket
+        if (data.payload && data.payload.post) {
+          addNotification(data.payload.post, true); // true = new/real-time
+        }
+      };
+
+      ws.onerror = function (error) {
+        console.error("WebSocket Error:", error);
+        statusDiv.textContent = "Error ✗";
+        statusDiv.style.color = "white";
+        statusDiv.style.background = "#f44336";
+      };
+
+      ws.onclose = function (e) {
+        console.log("WebSocket Closed:", e.code, e.reason);
+        statusDiv.textContent = "Disconnected ✗ - Reconnecting...";
+        statusDiv.style.color = "white";
+        statusDiv.style.background = "#ff9800";
+
+        // Attempt to reconnect after 3 seconds
+        setTimeout(() => {
+          location.reload();
+        }, 3000);
+      };
+
+      // Load existing notifications from API
+      async function loadExistingNotifications() {
+        try {
+          loadingDiv.textContent = "Loading notifications...";
+
+          const response = await fetch("http://localhost:8000/notifications/");
+          const data = await response.json();
+
+          console.log("Loaded existing notifications:", data);
+
+          loadingDiv.style.display = "none";
+
+          // Add each notification (in reverse order to show newest first)
+          data.reverse().forEach((notification) => {
+            addNotification(notification, false); // false = not new
+          });
+
+          if (data.length === 0) {
+            messagesDiv.innerHTML =
+              '<p style="color: #666; text-align: center;">No notifications yet. Create one!</p>';
+          }
+        } catch (error) {
+          console.error("Error loading notifications:", error);
+          loadingDiv.textContent = "Error loading notifications";
+          loadingDiv.style.color = "red";
+        }
+      }
+
+      // Add notification to the display
+      function addNotification(notification, isNew = false) {
+        // Prevent duplicates
+        if (notifications.has(notification.id)) {
+          return;
+        }
+
+        notifications.set(notification.id, notification);
+
+        const msg = document.createElement("div");
+        msg.className = isNew ? "notification new" : "notification";
+        msg.id = `notification-${notification.id}`;
+
+        const createdTime = new Date(notification.created_at).toLocaleString();
+
+        msg.innerHTML = `
+          <div class="notification-header">
+            <span class="notification-name">${escapeHtml(
+              notification.name
+            )}</span>
+            <span class="notification-time">${createdTime}</span>
+          </div>
+          <div class="notification-message">${escapeHtml(
+            notification.message
+          )}</div>
+          ${
+            isNew
+              ? '<div style="color: #4CAF50; font-size: 12px; margin-top: 5px;">● Just now</div>'
+              : ""
+          }
+        `;
+
+        // Add to top of list
+        messagesDiv.insertBefore(msg, messagesDiv.firstChild);
+
+        // Remove empty state message if it exists
+        const emptyMsg = messagesDiv.querySelector(
+          'p[style*="text-align: center"]'
+        );
+        if (emptyMsg) {
+          emptyMsg.remove();
+        }
+
+        // Remove "just now" indicator after 5 seconds
+        if (isNew) {
+          setTimeout(() => {
+            msg.className = "notification";
+            const justNow = msg.querySelector('div[style*="Just now"]');
+            if (justNow) justNow.remove();
+          }, 5000);
+        }
+      }
+
+      // Create new notification via REST API
+      async function createNotification(event) {
+        event.preventDefault(); // Prevent form submission
+
+        const name = nameInput.value.trim();
+        const message = messageInput.value.trim();
+
+        // Validation
+        if (!name || !message) {
+          alert("Please fill in both name and message!");
+          return;
+        }
+
+        if (name.length > 20) {
+          alert("Name must be 20 characters or less!");
+          return;
+        }
+
+        if (message.length > 200) {
+          alert("Message must be 200 characters or less!");
+          return;
+        }
+
+        // Disable button while sending
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Sending...";
+
+        try {
+          const response = await fetch("http://localhost:8000/notifications/", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              name: name,
+              message: message,
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const data = await response.json();
+          console.log("Notification created:", data);
+
+          // Clear form
+          nameInput.value = "";
+          messageInput.value = "";
+          nameCounter.textContent = "0/20";
+          messageCounter.textContent = "0/200";
+          nameCounter.classList.remove("warning", "error");
+          messageCounter.classList.remove("warning", "error");
+
+          // Show success feedback
+          submitBtn.textContent = "✓ Sent!";
+          submitBtn.style.background = "#4CAF50";
+
+          setTimeout(() => {
+            submitBtn.textContent = "📤 Send Notification";
+            submitBtn.style.background = "#2196F3";
+          }, 2000);
+        } catch (error) {
+          console.error("Error creating notification:", error);
+          alert("Error creating notification. Please try again.");
+
+          submitBtn.textContent = "✗ Failed";
+          submitBtn.style.background = "#f44336";
+
+          setTimeout(() => {
+            submitBtn.textContent = "📤 Send Notification";
+            submitBtn.style.background = "#2196F3";
+          }, 2000);
+        } finally {
+          submitBtn.disabled = false;
+        }
+      }
+
+      // Escape HTML to prevent XSS
+      function escapeHtml(text) {
+        const div = document.createElement("div");
+        div.textContent = text;
+        return div.innerHTML;
+      }
+
+      // Show notification count in page title
+      window.addEventListener("focus", function () {
+        document.title = "Real-Time Notifications";
+      });
+
+      // Update notification count when new ones arrive
+      ws.addEventListener("message", function () {
+        if (document.hidden) {
+          document.title = "(1) New Notification!";
+        }
+      });
+    </script>
+  </body>
+</html>
